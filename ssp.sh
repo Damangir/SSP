@@ -41,7 +41,7 @@ log_debug() { log "$1" "DEBUG" "${SSP_DEBUG_COLOR}"; }
 
 error() { printf "${SSP_ERROR_COLOR}%s${SSP_DEFAULT_COLOR}\n" "$*" >&2 ; }
 warning() { printf "${SSP_WARN_COLOR}%s${SSP_DEFAULT_COLOR}\n" "$*" >&2 ; }
-join()  { local d=$1; shift; printf "$1"; shift; printf "%s" "${@/#/$d}"; }
+pjoin()  { local d=$1; shift; printf "$1"; shift; printf "%s" "${@/#/$d}"; }
 
 comment() {
   if [ -z "${DO_NOTHING}" ]
@@ -83,19 +83,23 @@ then
   return 1
 fi
 
-hline
 
 declare -r STAGE=${SCRIPT_NAME%.*}
 
-comment Begin stage $STAGE
+hline
+comment "SSP - https://github.com/Damangir/SSP"
+comment "This is reproduction script."
+comment "Please do not modify this file it's for your record"
+hline
+comment "Begin SSP for $STAGE"
 
 if [ -d $(dirname ${PROCDIR} 2>/dev/null) ]
 then
   declare -r PROCDIR=$( cd "$( dirname "${PROCDIR}" )" && pwd )/$(basename "${PROCDIR}")
-  comment ${SCRIPT_NAME}: PROCDIR is ${PROCDIR}
+  comment "PROCDIR: ${PROCDIR}"
   if ! [ -e ${PROCDIR} ]
   then
-    comment Creating ${PROCDIR}
+    comment "Creating ${PROCDIR}"
     mkdir ${PROCDIR}
   fi
 else
@@ -103,14 +107,13 @@ else
   exit 1
 fi
 
-
 # Set common directory and files
 declare -r LOGDIR=${PROCDIR}/Log
 declare -r TOUCHDIR=${PROCDIR}/Touch
 declare -r LOCKDIR=${PROCDIR}/Lock
 declare -r RERUNDIR=${PROCDIR}/Scripts
 
-declare -r CON_TEMPDIR=${PROCDIR}/Temp.$$
+declare -r CON_TEMPDIR=${PROCDIR}/Temp
 
 declare -r LOCK_FILE="${LOCKDIR}/processing"
 declare -r DONE_FILE="${TOUCHDIR}"/stage.${STAGE}.done
@@ -119,13 +122,21 @@ declare -r STARTED_FILE="${TOUCHDIR}"/stage.${STAGE}.started
 
 if [ -f "${SCRIPT_DIR}/directory_structure.sh" ]
 then
-  comment "Loading diredtory structure at ${SCRIPT_DIR}/directory_structure.sh"
+  comment "Diredtory structure: ${SCRIPT_DIR}/directory_structure.sh"
   source "${SCRIPT_DIR}/directory_structure.sh"
 fi
+hline
 
 mkdir -p "${LOGDIR}" "${TOUCHDIR}" "${LOCKDIR}" "${RERUNDIR}"
 
 [ "${DO_NOTHING}" ] && return
+
+printf "PROCDIR=\${PROCDIR:-\${1:-${PROCDIR}}}\n"
+printf "[ -d $(dirname ${PROCDIR} 2>/dev/null) ] || exit 1\n"
+printf "mkdir -p \${PROCDIR}/%s\n" Log Touch Lock Scripts
+printf "cp \$0 \${PROCDIR}/Scripts\n"
+
+[ -f "${SCRIPT_DIR}/directory_structure.sh" ] && cat "${SCRIPT_DIR}/directory_structure.sh"
 
 if [ -e "${LOCK_FILE}" ]
 then
@@ -134,11 +145,8 @@ Each subject can only be processed by one application at the same time."
   exit 1
 fi
 
-
-
 on_exit() {
   local rv=$?
-  set +x
   hline
   # Process done without error. Now we check if all req. files is there.
   if [ ${rv} -eq 0 ]
@@ -169,7 +177,7 @@ on_exit() {
   rm -rf "${STARTED_FILE}"
   rm -rf "${LOCK_FILE}"
   rm -rf "${CON_TEMPDIR}"
-  comment End stage $STAGE
+  comment "End SSP on $STAGE"
   hline
   printf "\n"
   exit $rv
@@ -187,13 +195,34 @@ trap on_exit EXIT
 run_and_log() {
   local run_name=$1
   shift
+
   hline
-  comment Stage ${STAGE}: ${run_name}
+  comment "Stage ${STAGE}: ${run_name}"
   hline
-  printf "%s " "$@"
-  printf "\n"
-  log_run "$*"
-  $@ 1>"${LOGDIR}"/log.${STAGE}.${run_name}.stdout 2>"${LOGDIR}"/log.${STAGE}.${run_name}.stderr
+  (
+    env_str=
+    while [[ $1 == *"="* ]]
+    do
+      declare "${1%=*}=${1#*=}"
+      export "${1%=*}"
+      env_str=$(pjoin " " ${1%=*}=${1#*=} $env_str)
+      shift
+    done
+    if declare -F $1 >/dev/null
+    then
+      __declare_functions
+      printf "(\n"
+      __print_var_in_function $1
+      printf "%s " "$@"
+      printf "\n)"
+    else
+      printf env
+      printf ' "%s"' $env_str "$@"
+    fi
+    printf "\n"
+    log_run "$env_str $*"
+    $@ 1>"${LOGDIR}"/log.${STAGE}.${run_name}.stdout 2>"${LOGDIR}"/log.${STAGE}.${run_name}.stderr
+  )
   local rv=$?
   if [ "${rv}" -eq 0 ]
   then
@@ -229,10 +258,12 @@ check_updated() {
 }
 
 check_already_run() {
+  [ "${FORCE_RUN}" ] && rm -f "${DONE_FILE}"
   if [ -e "${DONE_FILE}" ]
   then
-    warning "Stage ${STAGE} has already been done. To force re-run:"
-    warning "rm \"${TOUCHDIR}/stage.${STAGE}.done\""
+    warning "Stage ${STAGE} has already been done."
+    warning "To force re-run exprot FORCE_RUN=YES or:"
+    warning "rm \"${DONE_FILE}\""
     exit 0
   fi
 }
@@ -242,7 +273,7 @@ depends_on() {
   hline
   for file in "$@"
   do
-    comment Requires: $file
+    comment "Requires: $file"
     if ! [ -f "$file" ]
     then
       log_error "$file is required for running ${SCRIPT_NAME}."
@@ -273,13 +304,34 @@ EOM
   done
 }
 
-rm -rf "${TOUCHDIR}"/stage.${STAGE}.error
-rm -rf "${TOUCHDIR}"/touch.${STAGE}.*
+__print_var_in_function(){
+    for var in $(declare -f $1 | grep  -o -e '\${#\?[a-zA-Z][^}]*}' -e '\$[a-zA-Z][0-9a-zA-Z_]*' | 
+      sed 's/${*#*//g; s/[:[].*//g; s/}//g' | sort -u)
+    do
+      if ! [ -z ${!var:+x} ]
+      then
+        (unset $var 2> /dev/null) || continue
+        printf "$var=${!var}\n"
+      fi
+
+    done
+}
+__declare_functions() {
+  declare -F | sort -u | comm -13 "${CON_TEMPDIR}/old.functions.txt" - >"${CON_TEMPDIR}/to.source.__declare_functions"
+  if [ -s "${CON_TEMPDIR}/to.source.__declare_functions" ]
+  then
+    source "${CON_TEMPDIR}/to.source.__declare_functions"
+  fi
+  declare -F | sort -u > "${CON_TEMPDIR}/old.functions.txt"
+}
+declare -F | sort -u > "${CON_TEMPDIR}/old.functions.txt"
+
+rm -f "${TOUCHDIR}"/stage.${STAGE}.error
+rm -f "${TOUCHDIR}"/touch.${STAGE}.*
 
 touch "${LOCKDIR}/processing"
 touch "${TOUCHDIR}/stage.${STAGE}.started"
 
-hline
 printf "\n"
 
 set -e
