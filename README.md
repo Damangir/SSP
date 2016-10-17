@@ -39,7 +39,7 @@ After all these small boilerplate to define the procedure, each command can be r
 ```bash
 run_and_log step_name command arg1 arg2
 ```
-You can run any regular command or functions. In order for reproduce script to run properly you should prnt the function body by `declare`.
+You can run any regular command or functions.
 
 Each pipeline will be run in a directory structure:
 ```bash
@@ -54,7 +54,7 @@ You can specify more directory relative to the root directory in `directory_stru
 
 ```bash
 # Let's define a directory for quality control
-QCDIR=${PROCDIR}/QC
+declare -r QCDIR=${PROCDIR}/QC
 mkdir -p "${QCDIR}"
 ```
 
@@ -75,16 +75,12 @@ expects	${QCDIR}/It.is.working.txt
 check_already_run
 remove_expected_output
 
-run_and_log 1.command.run printf "Hello"
+run_and_log 1.command.run printf "Hello\n"
 
 # More complex tasks can be defined in a function
 foobar(){
 	printf "%s\n" $@ >"${QCDIR}/It.is.working.txt"
 }
-
-# Always declare function after their definition so that the standard output
-# can be re-run again
-declare -f foobar
 
 # Logs can be done with log_*
 log_debug "User running: $(whoami)"
@@ -156,12 +152,12 @@ Read only environment variables:
 - `START_TIME`: Starting timestamp for the current run
 
 ### Utils
-`join` joins arguments with a delimiter:
+`pjoin` joins arguments with a delimiter:
 
 ```bash
-join delimiter item1 [item2] ...
+pjoin delimiter item1 [item2] ...
 
-$ join , 1 2 3 4 5
+$ pjoin , 1 2 3 4 5
 1,2,3,4,5
 ```
 
